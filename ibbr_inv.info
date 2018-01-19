@@ -1,0 +1,6 @@
+name = IBBR Inventory Scanning
+description = Adds a page to scan inventory items with the help of a bluetooth barcode scanner
+package = IBBR
+version = 7.0-1.0
+core = 7.x
+files[] = ibbr_inv.module

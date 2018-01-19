@@ -1,0 +1,367 @@
+<?php
+
+//hook_menu
+function ibbr_inv_menu(){
+	//'Inventory Items' page
+	$items['inventory_scan'] = array(
+	'title' => 'Inventory Items',
+        'page callback' => 'ibbr_inv_menu_page_callback',
+	'access arguments' => array('Administer Inventory Items'),
+	'page arguments' => array(1, 2),
+        'type'=> MENU_CALLBACK,
+	
+    );
+	//'Add new item' page
+	$items['inventory_scan/add_item'] = array(
+	'title' => 'Add new item',
+        'page callback' => 'ibbr_inv_add_new_item_callback',
+        'page arguments' => array(1, 2),
+        'type'=> MENU_CALLBACK,
+	'access arguments' => array('Administer Inventory Items'),
+	
+	);
+    return $items;
+}//end hook
+
+//hook_permission for limiting accessibility to inventory_scan
+function ibbr_inv_permission() {
+  $permissions['Administer Inventory Items'] = array(
+    'title' => t('Administer inventory items'),
+    'description' => t('Creates/deletes inventory items.'),
+  );
+  return $permissions;
+}
+
+//callback funtion that simply returns the form
+function ibbr_inv_menu_page_callback() {
+        return drupal_get_form('ibbr_inv_form');
+}//end call back
+
+//sets up all of the components on the 'Inventory Items' page
+function ibbr_inv_form($form, &$form_state) {
+	//Simple hierarcichal select for room
+	$vocabulary = taxonomy_vocabulary_machine_name_load('room');
+  	$taxonomy_tree = taxonomy_get_tree($vocabulary->vid);
+  	$terms = array();
+  	foreach ($taxonomy_tree as $key => $term) {
+    		$terms[$term->tid] = $term->name;
+  	}
+	//necessary for remembering the previous selection for room
+	$defaultRoom = 0;
+	if(isset($_GET['room2'])) {
+	$defaultRoom = $_GET['room2'];
+}
+  	$form['room2'] = array(
+    	'#type' => 'container',
+    	'#attributes' => array(
+        'class' => array(
+        'field-widget-taxonomy-shs',
+        ),
+      	),
+    	'#tree' => 1,
+  	);
+  	$form['room2']['room_selection'] = array(
+    	'#type' => 'select',
+	'#title' => t('Room Selection'),
+    	'#options' => $terms,
+	'#attributes' => array('class' => array('shs-enabled')),
+    	'#element_validate' => array('shs_field_widget_validate'),
+    	'#after_build' => array('shs_field_widget_afterbuild'),
+    	'#shs_settings' => array(
+      		'create_new_levels' => 0,
+		'create_new_terms' => 0,
+    		'force_deepest' => 0,
+      		'node_count' => 0,
+	      	'test_create_new_terms' => array(),
+    	  	'required' => TRUE,
+    	),
+    	'#language' => NULL,
+	'#field_name' => 'my_field',
+    	'#default_value' => $defaultRoom,
+	'#field_parents' => NULL,
+	'#shs_vocabularies' => array($vocabulary),
+	);
+
+	//text field for barcode
+	$form['barcode'] = array(
+    	'#type' => 'textfield',
+    	'#title' => t('Barcode'),
+    	'#default_value' => "",
+		'#attributes' => array('maxlength' => 15, 'size' => 15), 
+	);
+
+	//submit button that uses ajax (to display whats in callback)
+	$form['submit_button'] = array(
+		'#type'=> 'submit',
+		'#value'=> t('Submit'),
+		'#ajax' => array( //no need to refresh the page bc ajax
+        		'callback' => '_ibbr_inv_after_callback', //callback
+    		),
+    		'#suffix' => "<div id='after_div'><br></div>
+                	  <div id='after_status'></div>",
+	); 
+	return $form;
+	}//end ibbr_inv_form
+
+//function for submit button callback
+function _ibbr_inv_after_callback($form, $form_state) {
+  	$selector = '#after_div';
+  	$commands = array();
+	
+	$query = new EntityFieldQuery();
+	$entities = $query->entityCondition('entity_type', 'node') 
+	->propertyCondition('type', 'eq')
+	->propertyCondition('title', $form_state['input']['barcode'])
+	->range(0,1)
+	->execute();
+
+	//If this barcode is found in database
+	if (!empty($entities['node'])) {
+		$node = node_load(array_shift(array_keys($entities['node']))); 
+
+		//Load fields from returned equipment item
+		$room = taxonomy_term_load($node->field_eq_room['und'][0]['tid']);
+		$desc = $node->field_eq_description['und'][0]['value'];
+		$manu =  $node->field_eq_mfr['und'][0]['value'];
+		$model = $node->field_eq_modelno['und'][0]['value'];
+		$serial = $node->field_eq_serial['und'][0]['value'];
+		//displaying all the components of the specific barcode
+		$info = "<div id='after_div'><b>Title</b>: $node->title<br>
+				<b>Description</b>: $desc<br>
+				<b>Manufacturer</b>: $manu<br>
+				<b>Room</b>: $room->name<br>
+				<b>Model Number:</b> $model<br>
+				<b>Serial Number:</b> $serial<br></div>" . "<script type='text/javascript'>" .
+         "document.getElementById('after_div').scrollIntoView();" . 
+         "</script>";
+		//Displaying the Confirm and Flag buttons
+		$commands[] = ajax_command_replace($selector,  $info);
+		$commands[] = ajax_command_replace("#after_status", "<div id='after_status'> <button id = 'confirm' type = 'submit' name = 'Confirm' value = 'Confirm'> Confirm</button><button id = 'Flag' type = 'submit' name = 'flag' value = 'flag'>Flag </button> </div>");
+	//If this barcode is not found in the database
+	}else {
+		//Displaying the Add button and "Item not found" ONLY IF this entity is empty (meaning barcode was not found in database)
+		$body = "<div id = 'after_div'>Item not found.</div>" . "<script type='text/javascript'>" . "document.getElementById('after_div').scrollIntoView();" . "</script>";
+		$commands[] = ajax_command_replace($selector,  $body);
+		$commands[] = ajax_command_replace("#after_status", "<div id='after_status'><button id = 'add' type = 'submit' name = 'Add' value = 'Add'>Add new item</button></div>");
+	
+	} 
+  	return array('#type' => 'ajax', '#commands' => $commands);
+}//end _ibbr_inv_after_callback
+
+//functionality for all of the buttons
+function ibbr_inv_form_submit($form, &$form_state) {
+ 	if (isset($form_state['input']['barcode']) && $form_state['input']['barcode'] != "" ) { //if we have barcode and its not empty
+	$query = new EntityFieldQuery();
+	$entities = $query->entityCondition('entity_type', 'node')
+		->propertyCondition('type', 'eq')
+		->propertyCondition('title', $form_state['input']['barcode'])
+		->propertyCondition('status', 1)
+		->range(0,1)
+		->execute();
+
+	if (!empty($entities['node'])) {
+		$node = node_load(array_shift(array_keys($entities['node'])));
+	
+		//If Confirm button is clicked
+		if (isset($form_state['input']['Confirm'])) { 
+			$node->field_eq_flag['und'][0]['value'] = 0; //unflags it
+			$node->field_eq_time_stamp['und'][0]['value'] = date("Y-m-d"); //time stamp it
+			$node->field_eq_room['und'][0]['tid'] = $form_state['input']['room2']; //update the room
+			node_save($node); //save the node
+			drupal_set_message('Confirmed!');
+			//redirect back to main page with saved room selection
+			$form_state['redirect']  = array(
+			"/inventory_scan", 
+			array( "query" =>
+			array( "room2" => $form_state['input']['room2']['room_selection'])));
+
+		}
+		//If Flag button is clicked
+		if (isset($form_state['input']['flag'])) {
+			$node->field_eq_flag['und'][0]['value'] = 1; //flag it
+			$node->field_eq_time_stamp['und'][0]['value'] = date("Y-m-d"); //time stamp it
+			$node->field_eq_room['und'][0]['tid'] = $form_state['input']['room2']; //update the room
+			node_save($node); //save the node
+			drupal_set_message('FLAGGED!');
+			//redirect back to main page with saved room selection
+			$form_state['redirect']  = array(
+			"/inventory_scan",
+			array( "query" =>
+			array( "room2" => $form_state['input']['room2']['room_selection']))); 
+		}
+
+	}	
+		//If Add button is clicked
+		if (isset($form_state['input']['Add'])) {
+			//redirect to "Add new item" form (created below)
+			$form_state['redirect']  = array(
+			"/inventory_scan/add_item",
+			array( "query" =>
+			array( "room2" => $form_state['input']['room2']['room_selection'], 
+			"barcode"=> $form_state['input']['barcode'])));
+		}//end if
+
+	}//first if	
+	
+}//end function
+
+
+/*adding a new item function which creates new node (using all the info in form), displays message
+and redirects back to main page!*/
+function _ibbr_inv_add_new_item($form, &$form_state) {
+	
+	$node = new stdClass(); //create new node/new item
+	
+	//process the fields for the item
+	$node->field_eq_room['und'][0]['tid'] = $form_state['input']['room'];
+	$node->title = $form_state['input']['barcode'];
+	$node->field_eq_category['und'][0]['tid'] = $form_state['input']['Category']; //sets the category
+	$node->field_eq_mfr['und'][0]['value'] = $form_state['input']['Manufacturer']; //sets the manufacturer
+    	$node->field_eq_modelno['und'][0]['value'] = $form_state['input']['Model']; //sets the model number
+    	$node->field_eq_serial['und'][0]['value'] = $form_state['input']['Serial']; //sets the serial number
+	$node->type = "eq"; //machine name for type equipment
+ 	node_object_prepare($node); //get default/other fields
+	$node->language = LANGUAGE_NONE;
+ 	$node->uid = 1;
+	$node->status = 1; //published
+ 	$node->promote = 0;
+	$node->field_eq_time_stamp['und'][0]['value'] = date("Y-m-d"); //update time stamp
+	$node->field_eq_flag['und'][0]['value'] = 1; //flag it so he can go back and fill out other fields if necessary
+	$node = node_submit($node);	
+	node_save($node); //save the node
+
+	drupal_set_message(t('Item added!'));
+	//redirect back to main page with room filled in	
+	 $form_state['redirect']  = array(
+                                        "/inventory_scan",
+                                        array( "query" =>
+                                                array( "room2" => $form_state['input']['room'])));
+
+}//end add new item function
+
+//function that returns the form for adding a new item
+function ibbr_inv_add_new_item_callback() {
+	return drupal_get_form('_ibbr_inv_add_new_item_form');
+}
+	
+	//form for adding a new time; sets up all 5 necessary components to complete the creation of new node/item = 'INFO'
+	function _ibbr_inv_add_new_item_form($form, $form_state) {
+	$room = 0;
+	$barcode = 0;
+	
+	//if the barcode exists, get the barcode
+	if (isset($_GET['room2'])) {
+	$room = $_GET['room2'];
+	}
+	
+	//'hidden element' for room parameter: isnt shown on the page but value is still there/usable now
+	$form['room'] = array(
+        '#type' => 'hidden',
+        '#title' => t('room'),
+        '#default_value' => $room,
+                '#attributes' => array('maxlength' => 255, 'size' =>60 ),
+        );
+
+	//if the barcode exists, get the barcode
+	if (isset($_GET['barcode'])) {
+	$barcode = $_GET['barcode'];
+	}
+
+	//'hidden element' for barcode parameter: isnt shown on the page but value is still there/usable now
+        $form['barcode'] = array(
+        '#type' => 'hidden',
+        '#title' => t('barcode'),
+        '#default_value' => $barcode,
+                '#attributes' => array('maxlength' => 255, 'size' =>60 ),
+        );
+
+	//text field for Manufacturer
+        $form['Manufacturer'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Manufacturer'),
+        '#default_value' => "",
+                '#attributes' => array('maxlength' => 255, 'size' =>60 ),
+        );
+        //text field for Serial Number
+        $form['Serial'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Serial Number'),
+        '#default_value' => "",
+                '#attributes' => array('maxlength' => 255, 'size' => 60),
+        );
+
+        //text field for Model Number
+        $form['Model'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Model Number'),
+        '#default_value' => "",
+                '#attributes' => array('maxlength' => 255, 'size' => 60),
+        );
+
+
+	//'Category' simple heirarchical selection
+	$vocabulary = taxonomy_vocabulary_machine_name_load('equipment');
+        $taxonomy_tree = taxonomy_get_tree($vocabulary->vid);
+        $terms = array();
+        foreach ($taxonomy_tree as $key => $term) {
+                $terms[$term->tid] = $term->name;
+        }
+        
+	//remember the previous selection!!!!!
+        $form['Category'] = array(
+        '#type' => 'container',
+        '#attributes' => array(
+        'class' => array(
+        'field-widget-taxonomy-shs',
+        ),
+        ),
+        '#tree' => 1,
+        );
+        
+	$form['Category']['cat_selection'] = array(
+        '#type' => 'select',
+        '#title' => t('Category Selection'),
+        '#options' => $terms,
+        '#attributes' => array('class' => array('shs-enabled')),
+        '#element_validate' => array('shs_field_widget_validate'),
+        '#after_build' => array('shs_field_widget_afterbuild'),
+        '#shs_settings' => array(
+                'create_new_levels' => 0,
+                'create_new_terms' => 0,
+                'force_deepest' => 0,
+                'node_count' => 0,
+                'test_create_new_terms' => array(),
+                'required' => TRUE,
+        ),
+        '#language' => NULL,
+        '#field_name' => 'category_field',
+        '#default_value' => 0,
+        '#field_parents' => NULL,
+        '#shs_vocabularies' => array($vocabulary),
+        );
+
+	 //submit button (without ajax) who calls the add new item function
+         $form['actions']['save_item_button'] = array(
+                '#type'=> 'submit',
+                '#value'=> t('Save Item'),
+		'#name' => 'save_item',
+		'#submit' => array('_ibbr_inv_add_new_item')
+          );
+
+	return $form;
+}//return add new item form
+
+
+//this function overrides the original theme with page--inventory_scan.tpl.php file in /ibbr_inv/templates
+function ibbr_inv_theme_registry_alter(&$theme_registry) {
+    $mod_path = drupal_get_path('module', 'ibbr_inv');
+    $theme_array = array('page__inventory_scan' => array(
+	'template' => 'page--inventory_scan',
+	'path' => $mod_path . '/templates',
+	'base hook' => 'page',
+	'type' => 'theme_engine',
+	'theme path' => $mod_path
+    ));
+    $theme_registry += $theme_array;
+
+}//end theme registry alter
